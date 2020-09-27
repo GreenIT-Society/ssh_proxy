@@ -1,37 +1,36 @@
 package main
 
 import (
-	"io"
+	"fmt"
 	"log"
+	"os/exec"
 
 	"github.com/gliderlabs/ssh"
 )
 
 func main() {
+	ssh.Handle(func(s ssh.Session) {
+		cmd := exec.Command("ssh-add", "-l")
+		if ssh.AgentRequested(s) {
+			l, err := ssh.NewAgentListener()
+			if err != nil {
+				log.Fatal(err)
+			}
+			defer l.Close()
+			go ssh.ForwardAgentConnections(l, s)
+			cmd.Env = append(s.Environ(), fmt.Sprintf("%s=%s", "SSH_AUTH_SOCK", l.Addr().String()))
+			log.Println(l.Addr().String())
+		} else {
+			cmd.Env = s.Environ()
+		}
+		cmd.Stdout = s
+		cmd.Stderr = s.Stderr()
+		if err := cmd.Run(); err != nil {
+			log.Println(err)
+			return
+		}
+	})
 
 	log.Println("starting ssh server on port 2222...")
-
-	forwardHandler := &ssh.ForwardedTCPHandler{}
-
-	server := ssh.Server{
-		LocalPortForwardingCallback: ssh.LocalPortForwardingCallback(func(ctx ssh.Context, dhost string, dport uint32) bool {
-			log.Println("Accepted forward", dhost, dport)
-			return true
-		}),
-		Addr: ":2222",
-		Handler: ssh.Handler(func(s ssh.Session) {
-			io.WriteString(s, "Remote forwarding available...\n")
-			select {}
-		}),
-		ReversePortForwardingCallback: ssh.ReversePortForwardingCallback(func(ctx ssh.Context, host string, port uint32) bool {
-			log.Println("attempt to bind", host, port, "granted")
-			return true
-		}),
-		RequestHandlers: map[string]ssh.RequestHandler{
-			"tcpip-forward":        forwardHandler.HandleSSHRequest,
-			"cancel-tcpip-forward": forwardHandler.HandleSSHRequest,
-		},
-	}
-
-	log.Fatal(server.ListenAndServe())
+	log.Fatal(ssh.ListenAndServe(":2222", nil))
 }
